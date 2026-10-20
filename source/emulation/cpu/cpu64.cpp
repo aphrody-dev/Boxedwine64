@@ -4394,6 +4394,18 @@ dsp_54:
             return used;
         }
 
+        // CVTPS2PD xmm, xmm/m64 — 0F 5A /r. Read both source lanes before
+        // writing either destination lane, including when source == destination.
+        if (op2 == 0x5A && p.rep == 0 && !osize66) {
+            ModRM m = decodeModRM(rip + opOff + 2, p, 0);
+            U64 source = m.isReg ? xmm[m.rmIndex].lo : memory->readq(m.effAddr);
+            xmm[m.regField].lo = doubleToU64((double)u32ToFloat((U32)source));
+            xmm[m.regField].hi = doubleToU64((double)u32ToFloat((U32)(source >> 32)));
+            U32 used = opOff + 2 + m.length;
+            rip += used;
+            return used;
+        }
+
         // CVTSS2SD xmm, xmm/m32   F3 0F 5A /r — widen single (src low 32 bits)
         // to double, writing the full low qword of dst. winex11/win32u hits
         // this converting single-precision metrics to double for layout math.

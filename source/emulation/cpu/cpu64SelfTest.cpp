@@ -255,6 +255,36 @@ int runX64SelfTest() {
         if (ok) r.passed++; else r.failed++;
     }
 
+    // CVTPS2PD: real xmm0,xmm6 opcode, aliasing, exactly-eight-byte memory
+    // operand at a page end, and extended registers. Include signed zero/Inf.
+    for (int variant = 0; variant < 4; variant++) {
+        KMemory64 mem(nullptr);
+        mem.mmapAnonymousFixed(CODE_BASE, 0x1000, 7);
+        mem.mmapAnonymousFixed(STACK_TOP - 0x1000, 0x1000, 3);
+        const std::vector<U8> code = variant == 0 ? std::vector<U8>{0x0F, 0x5A, 0xC6}
+            : variant == 1 ? std::vector<U8>{0x0F, 0x5A, 0xC0}
+            : variant == 2 ? std::vector<U8>{0x0F, 0x5A, 0x07}
+                           : std::vector<U8>{0x45, 0x0F, 0x5A, 0xC1};
+        loadCode(mem, CODE_BASE, code);
+        const U64 source = variant == 3 ? 0x7f80000080000000ULL : 0xc01000003fc00000ULL;
+        const U64 expectedLo = variant == 3 ? 0x8000000000000000ULL : 0x3ff8000000000000ULL;
+        const U64 expectedHi = variant == 3 ? 0x7ff0000000000000ULL : 0xc002000000000000ULL;
+        CPU64 cpu(&mem);
+        cpu.rip = CODE_BASE;
+        cpu.reg[X64_RDI].setU64(STACK_TOP - 8);
+        mem.writeq(STACK_TOP - 8, source);
+        const int src = variant == 0 ? 6 : variant == 3 ? 9 : 0;
+        const int dst = variant == 3 ? 8 : 0;
+        cpu.xmm[src].lo = source;
+        cpu.xmm[src].hi = 0xdeadbeefcafebabeULL;
+        cpu.runBounded(1);
+        bool ok = cpu.rip == CODE_BASE + code.size() &&
+            cpu.xmm[dst].lo == expectedLo && cpu.xmm[dst].hi == expectedHi;
+        if (src != dst) ok = ok && cpu.xmm[src].lo == source && cpu.xmm[src].hi == 0xdeadbeefcafebabeULL;
+        printf("  %s: cvtps2pd variant %d\n", ok ? "PASS" : "FAIL", variant);
+        if (ok) r.passed++; else r.failed++;
+    }
+
     // IRETQ (48 CF). Wine's PE-side ntdll returns from its user-mode exception
     // dispatcher with iretq. Build a long-mode interrupt frame on the stack
     // (pushed high-to-low: SS, RSP, RFLAGS, CS, RIP) and execute iretq; it must

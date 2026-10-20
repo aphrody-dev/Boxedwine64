@@ -66,6 +66,13 @@ iggy et render_pass. Il rencontre ensuite une instruction non implémentée :
 ni gameplay n'est confirmé. L'absence d'erreur GnuTLS dans ce journal ne vaut
 pas une qualification de connexion TLS.
 
+`CVTPS2PD` est ensuite implémenté avec quatre tests : instruction réelle,
+alias source/destination, lecture m64 en fin de page, registres REX avec zéro
+signé et infini. Chrome exécute le nouveau WASM SHA-256
+`3536227c3bbd523e17079c3afbdea8760e4b9da24a23d458af82bfa77291a0d8` :
+**245 tests réussis, zéro échec**, dont les quatre nouvelles variantes.
+Le lancement complet du jeu avec ce dernier moteur reste à qualifier.
+
 ## Compression
 
 Sur le premier moteur patché, le WASM de 2 638 098 octets donne 685 890 octets en

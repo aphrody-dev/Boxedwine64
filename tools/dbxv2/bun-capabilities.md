@@ -19,6 +19,11 @@ Le parent a exécuté le premier avec succès : PE64 x86_64, 23 877 704 octets, 
 
 `re bin` utilise `bunre pipeline triage` puis `bun:windows.pe` sans lifting (`vendor/rea/src/binary/inspect.ts:38`). À l'inverse, `re inspect` route vers `runDirectAnalysis(binary_overview)` (`src/cli/coreBinaryCommands.ts:134`) : l'ouverture d'analyse peut être coûteuse. `--filter-output` filtre la sortie, pas le travail. L'analyse lourde a été arrêtée par le parent ; aucune seconde analyse lourde n'a été lancée.
 
+Un second triage réel sur `bin/xgcore.dll` confirme PE64 x86_64, 4 017 152
+octets, 23 DLL, 258 imports et 3 600 exports ; SHA256
+`5f8eed201c146b47aabee69aefc618ab4b815bb4b8eb6c726a3b736e055ed1b7`.
+Il conserve un périmètre statique et ne prouve pas le rendu.
+
 ## « Model serve » : modèles 3D et modèles ML sont distincts
 
 **Pour DBXV2, `re game ... serve` est un serveur de modèles 3D et d'assets.** Le code `vendor/rea/src/game/server.ts` expose `/model/<path>.glb`, `/tex/<path>.png`, `/audio/<path>.wav`, `/table/<path>.json`, `/vfs/*`. Un worker Rust persistant lit et convertit les assets ; ce n'est pas une façade de réponses vides. Le service lie localhost par défaut. Les octets originaux exigent le jeton configuré ; les formats dérivés sont publics sur l'interface liée. Aucun jeton consulté pendant cet audit.
