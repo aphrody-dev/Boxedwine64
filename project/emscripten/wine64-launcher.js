@@ -88,6 +88,8 @@
     var WINE_ZIP = "wine64.zip";
     var PREFIX_ZIP = "prefix64.zip"; // pre-booted .wine prefix (+glcube.exe), ~257KB
     var ROOT = "/root";
+    // Optional host-owned profile, prepared before this launcher script loads.
+    var BOOT_PROFILE = window.BW64_BOOT_PROFILE || null;
     var WINE64 = "/usr/lib/wine/wine64";
     var WINESERVER64 = "/usr/lib/wine/wineserver64"; // real daemon binary (session mode)
     // The pre-booted prefix in PREFIX_ZIP lives here (dosdevices c: -> ../drive_c,
@@ -143,7 +145,7 @@
         SESSION = USE_PREFIX && opts.session !== false;
     }
     // Initial config from the URL (?boot / ?novideo / ?p / ?session).
-    applyRunConfig(param("p"), {
+    applyRunConfig(BOOT_PROFILE ? BOOT_PROFILE.program : param("p"), {
         boot: param("boot") === "1",
         novideo: param("novideo") === "1",
         session: param("session") !== "0"
@@ -193,6 +195,9 @@
 
     // argv for running a Windows/guest program under wine64: [wine64, tok, ...].
     function wineProgArgv(prog) {
+        if (BOOT_PROFILE && prog === BOOT_PROFILE.program) {
+            return [WINE64].concat(BOOT_PROFILE.programArgv);
+        }
         var argv = [WINE64];
         (prog || "").split(/\s+/).forEach(function (tok) { if (tok.length) argv.push(tok); });
         return argv;
@@ -201,6 +206,10 @@
     // --- build the wine64 argv ----------------------------------------------
     function buildArguments() {
         var args = ["-root", ROOT, "-zip", GLIBC_ZIP, "-zip", wineZipArg];
+        if (BOOT_PROFILE) {
+            BOOT_PROFILE.zipSpecs.forEach(function (spec) { args.push("-zip", spec); });
+            args.push("-w", BOOT_PROFILE.workingDirectory);
+        }
         // The pre-booted prefix is a third overlay; mount it only when we'll use
         // it, so the bare --version / ?boot=1 paths stay byte-for-byte unchanged.
         if (USE_PREFIX) args.push("-zip", PREFIX_ZIP);

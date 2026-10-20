@@ -12,6 +12,7 @@ bool fsZipUrlIsSpec(BString path) {
 #include <emscripten.h>
 #include <cstdlib>
 #include <map>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -56,11 +57,35 @@ EMSCRIPTEN_KEEPALIVE void bw64FetchDone(double ctxAddr, double jobAddr, int resu
 EM_JS(void, bw64StartFetch, (double ctxAddr, double jobAddr, const char* url, double start, double endIncl, double dstAddr, int want), {
     var u = UTF8ToString(url);
     var range = 'bytes=' + start + '-' + endIncl;
-    fetch(u, { headers: { 'Range': range }, cache: 'no-store' }).then(function (r) {
-        if (r.status != 206 && !(r.status == 200 && start == 0)) {
+    fetch(u, { headers: { 'Range': range }, cache: 'no-store', signal: AbortSignal.timeout(60000) }).then(async function (r) {
+        if (r.status != 206) {
+            if (r.body) await r.body.cancel();
             throw { bwStatus: r.status };
         }
-        return r.arrayBuffer();
+        var expected = 'bytes ' + start + '-' + endIncl + '/';
+        if (!(r.headers.get('Content-Range') || '').startsWith(expected) || !r.body) {
+            if (r.body) await r.body.cancel();
+            throw { bwStatus: 416 };
+        }
+        var reader = r.body.getReader();
+        var result = new Uint8Array(want);
+        var offset = 0;
+        try {
+            for (;;) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                if (offset + chunk.value.length > want) throw { bwStatus: 416 };
+                result.set(chunk.value, offset);
+                offset += chunk.value.length;
+            }
+            if (offset != want) throw { bwStatus: 416 };
+        } catch (e) {
+            await reader.cancel();
+            throw e;
+        } finally {
+            reader.releaseLock();
+        }
+        return result.buffer;
     }).then(function (ab) {
         var src = new Uint8Array(ab);
         var n = src.length < want ? src.length : want;
@@ -100,6 +125,8 @@ static int bw64SyncFetchRange(const char* url, double start, double endIncl, U8*
 namespace {
 
 constexpr U64 BLOCK_SIZE = 512 * 1024;
+// Large game archives must not grow the browser heap as every asset is visited.
+constexpr size_t MAX_CACHED_BLOCKS = 128; // 64 MiB per archive, shared by its readers
 
 struct UrlPart {
     BString url;
@@ -114,7 +141,12 @@ struct RangedFile {
     U64 fetched = 0;      // stats: bytes downloaded so far
     U64 lastLogged = 0;
     std::mutex m;
-    std::map<U64, std::unique_ptr<U8[]>> blocks;
+    struct CachedBlock {
+        std::unique_ptr<U8[]> bytes;
+        std::list<U64>::iterator recency;
+    };
+    std::list<U64> recency;
+    std::map<U64, CachedBlock> blocks;
 
     // Fetch [off, off+len) directly from the underlying parts into dst.
     bool fetchRaw(U64 off, U64 len, U8* dst) {
@@ -151,7 +183,8 @@ struct RangedFile {
     const U8* getBlock(U64 idx) {
         auto it = blocks.find(idx);
         if (it != blocks.end()) {
-            return it->second.get();
+            recency.splice(recency.begin(), recency, it->second.recency);
+            return it->second.bytes.get();
         }
         U64 off = idx * BLOCK_SIZE;
         if (off >= total) {
@@ -163,7 +196,12 @@ struct RangedFile {
             return nullptr;
         }
         const U8* raw = buf.get();
-        blocks[idx] = std::move(buf);
+        if (blocks.size() >= MAX_CACHED_BLOCKS) {
+            blocks.erase(recency.back());
+            recency.pop_back();
+        }
+        recency.push_front(idx);
+        blocks.emplace(idx, CachedBlock{std::move(buf), recency.begin()});
         return raw;
     }
 

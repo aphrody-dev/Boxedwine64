@@ -1,0 +1,12 @@
+{
+  "name": "boxedwine64-dbxv2-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "check": "bun check"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3"
+  }
+}

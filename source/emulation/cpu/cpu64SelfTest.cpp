@@ -194,6 +194,38 @@ int runX64SelfTest() {
         });
     }
 
+    // RET imm16 must decode an unsigned little-endian adjustment before
+    // popping RIP. Include the exact C2 00 00 observed in the game launcher.
+    for (U32 release : {0u, 24u, 0x8001u}) {
+        std::vector<U8> code = {
+            0xEB, 0x0A,
+            0x48, 0xC7, 0xC0, 0x77, 0x00, 0x00, 0x00,
+            0xC2, (U8)release, (U8)(release >> 8),
+            0xE8, 0xF1, 0xFF, 0xFF, 0xFF,
+        };
+        runAndCheck(r, "call/ret imm16 unsigned stack adjustment", withExit(code), [release](CPU64& c) {
+            return c.reg[X64_R15].u64 == 0x77 &&
+                   c.reg[X64_RSP].u64 == STACK_TOP - 16 + release;
+        });
+    }
+
+    {
+        KMemory64 mem(nullptr);
+        mem.mmapAnonymousFixed(CODE_BASE, 0x1000, 7);
+        mem.mmapAnonymousFixed(STACK_TOP - 0x1000, 0x1000, 3);
+        loadCode(mem, CODE_BASE, {0xC2, 0x20, 0x00});
+        const U64 target = 0x140020940ULL;
+        const U64 stack = STACK_TOP - 64;
+        mem.writeq(stack, target);
+        CPU64 cpu(&mem);
+        cpu.rip = CODE_BASE;
+        cpu.reg[X64_RSP].setU64(stack);
+        cpu.runBounded(1);
+        const bool ok = cpu.rip == target && cpu.reg[X64_RSP].u64 == stack + 8 + 32;
+        printf("  %s: ret imm16 preserves 64-bit target\n", ok ? "PASS" : "FAIL");
+        if (ok) r.passed++; else r.failed++;
+    }
+
     // IRETQ (48 CF). Wine's PE-side ntdll returns from its user-mode exception
     // dispatcher with iretq. Build a long-mode interrupt frame on the stack
     // (pushed high-to-low: SS, RSP, RFLAGS, CS, RIP) and execute iretq; it must

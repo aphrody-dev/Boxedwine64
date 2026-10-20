@@ -140,6 +140,8 @@ typedef struct
     bz_stream bstream;          /* bzLib stream structure for bziped */
 #endif
 
+    ZPOS64_T stored_data_start; /* start of entry data for bounded STORE seeks */
+    int crc32_valid; /* false after a non-sequential seek */
     ZPOS64_T pos_in_zipfile;       /* position in byte on the zipfile, for fseek*/
     uLong stream_initialised;   /* flag set if stream structure is initialised*/
 
@@ -1539,6 +1541,7 @@ extern int ZEXPORT unzOpenCurrentFile3 (unzFile file, int* method,
 
     pfile_in_zip_read_info->crc32_wait=s->cur_file_info.crc;
     pfile_in_zip_read_info->crc32=0;
+    pfile_in_zip_read_info->crc32_valid=1;
     pfile_in_zip_read_info->total_out_64=0;
     pfile_in_zip_read_info->compression_method = s->cur_file_info.compression_method;
     pfile_in_zip_read_info->filestream=s->filestream;
@@ -1606,6 +1609,7 @@ extern int ZEXPORT unzOpenCurrentFile3 (unzFile file, int* method,
     pfile_in_zip_read_info->pos_in_zipfile =
             s->cur_file_info_internal.offset_curfile + SIZEZIPLOCALHEADER +
               iSizeVar;
+    pfile_in_zip_read_info->stored_data_start = pfile_in_zip_read_info->pos_in_zipfile;
 
     pfile_in_zip_read_info->stream.avail_in = (uInt)0;
 
@@ -1655,6 +1659,40 @@ extern int ZEXPORT unzOpenCurrentFile2 (unzFile file, int* method, int* level, i
 
 /** Addition for GDAL : START */
 
+/* Random access is restricted to unencrypted STORE entries. DEFLATE callers
+   must retain their sequential decoder. A nonzero seek cannot verify the full
+   entry CRC; seeking back to zero restores ordinary sequential CRC validation. */
+extern int ZEXPORT unzSeekCurrentFile64(unzFile file, ZPOS64_T offset)
+{
+    unz64_s* s;
+    file_in_zip64_read_info_s* p;
+    ZPOS64_T position;
+    if (file == NULL) return UNZ_PARAMERROR;
+    s = (unz64_s*)file;
+    p = s->pfile_in_zip_read;
+    if (p == NULL || p->compression_method != 0 || p->raw || s->encrypted ||
+        (s->cur_file_info.flag & 1) != 0 ||
+        s->cur_file_info.compressed_size != s->cur_file_info.uncompressed_size ||
+        offset > s->cur_file_info.uncompressed_size)
+        return UNZ_PARAMERROR;
+    if (offset == p->total_out_64) return UNZ_OK;
+    if (offset > (ZPOS64_T)-1 - p->stored_data_start) return UNZ_BADZIPFILE;
+    position = p->stored_data_start + offset;
+    if (p->byte_before_the_zipfile > (ZPOS64_T)-1 - position) return UNZ_BADZIPFILE;
+    if (ZSEEK64(p->z_filefunc, p->filestream,
+               position + p->byte_before_the_zipfile, ZLIB_FILEFUNC_SEEK_SET) != 0)
+        return UNZ_ERRNO;
+    p->pos_in_zipfile = position;
+    p->stream.avail_in = 0;
+    p->stream.next_in = (Bytef*)p->read_buffer;
+    p->rest_read_compressed = s->cur_file_info.compressed_size - offset;
+    p->rest_read_uncompressed = s->cur_file_info.uncompressed_size - offset;
+    p->total_out_64 = offset;
+    p->stream.total_out = (uLong)offset;
+    p->crc32 = 0;
+    p->crc32_valid = (offset == 0);
+    return UNZ_OK;
+}
 extern ZPOS64_T ZEXPORT unzGetCurrentFileZStreamPos64( unzFile file)
 {
     unz64_s* s;
@@ -2017,7 +2055,7 @@ extern int ZEXPORT unzCloseCurrentFile (unzFile file)
 
 
     if ((pfile_in_zip_read_info->rest_read_uncompressed == 0) &&
-        (!pfile_in_zip_read_info->raw))
+        (!pfile_in_zip_read_info->raw) && pfile_in_zip_read_info->crc32_valid)
     {
         if (pfile_in_zip_read_info->crc32 != pfile_in_zip_read_info->crc32_wait)
             err=UNZ_CRCERROR;

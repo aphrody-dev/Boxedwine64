@@ -750,7 +750,7 @@ U32 CPU64::step() {
         case 0xd7: goto dsp_21;
         case 0x68: case 0x6a: goto dsp_22;
         case 0x0f: goto dsp_23;
-        case 0xc3: goto dsp_26;
+        case 0xc2: case 0xc3: goto dsp_26;
         case 0xcf: goto dsp_27;
         case 0xa0: case 0xa1: case 0xa2: case 0xa3: goto dsp_28;
         case 0xa8: case 0xa9: goto dsp_29;
@@ -787,11 +787,11 @@ U32 CPU64::step() {
         case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: case 0x48: 
         case 0x49: case 0x4a: case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f: case 0x60: 
         case 0x61: case 0x62: case 0x64: case 0x65: case 0x66: case 0x67: case 0x6c: case 0x6d: 
-        case 0x6e: case 0x6f: case 0x82: case 0x9a: case 0xac: case 0xad: case 0xc2: case 0xc4: 
-        case 0xc5: case 0xc8: case 0xca: case 0xcb: case 0xcd: case 0xce: case 0xd4: case 0xd5: 
-        case 0xd6: case 0xe0: case 0xe1: case 0xe2: case 0xe3: case 0xe4: case 0xe5: case 0xe6: 
-        case 0xe7: case 0xea: case 0xec: case 0xed: case 0xee: case 0xef: case 0xf0: case 0xf1: 
-        case 0xf2: case 0xf3: case 0xf4: case 0xfa: case 0xfb: goto unhandled;
+        case 0x6e: case 0x6f: case 0x82: case 0x9a: case 0xac: case 0xad: case 0xc4: case 0xc5:
+        case 0xc8: case 0xca: case 0xcb: case 0xcd: case 0xce: case 0xd4: case 0xd5: case 0xd6:
+        case 0xe0: case 0xe1: case 0xe2: case 0xe3: case 0xe4: case 0xe5: case 0xe6: case 0xe7:
+        case 0xea: case 0xec: case 0xed: case 0xee: case 0xef: case 0xf0: case 0xf1: case 0xf2:
+        case 0xf3: case 0xf4: case 0xfa: case 0xfb: goto unhandled;
     }
 
     // ---- Single-byte opcodes ----
@@ -1344,11 +1344,17 @@ dsp_23:
         }
     }
 
-    // RET (C3) — near return, no immediate.
+    // RET (C3/C2) — pop a 64-bit return address, then release imm16 bytes.
 dsp_26:
-    if (op == 0xC3) {
+    if (op == 0xC3 || op == 0xC2) {
+        U32 release = 0;
+        if (op == 0xC2) {
+            release = (U32)fetchByte(rip + opOff + 1) |
+                      ((U32)fetchByte(rip + opOff + 2) << 8);
+        }
         rip = pop64();
-        return opOff + 1;
+        reg[X64_RSP].u64 += release;
+        return opOff + (op == 0xC2 ? 3 : 1);
     }
 
     // IRETQ (REX.W CF == 48 CF), and the non-promoted IRET (CF) / IRETD.

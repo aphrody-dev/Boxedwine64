@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DBXV2 — Boxedwine64</title><link rel="stylesheet" href="boxedwine.css"></head>
+<body>
+<main id="app">
+<h1>DBXV2 — Boxedwine64</h1>
+<p>L’installation complète configurée sur le serveur local est montée en lecture seule. Les fichiers sont lus à la demande. Ce profil tente le lancement du programme original ; sa compatibilité graphique, Steam et EAC n’est pas encore validée.</p>
+<button id="launch" type="button">Monter l’installation et lancer</button>
+<output id="status" role="status">Prêt à charger l’installation configurée.</output>
+<progress id="progress" hidden></progress><span id="spinner" hidden></span>
+<div id="dropzone"><div class="emscripten_border"><canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="0" aria-label="Affichage du programme Windows"></canvas></div></div>
+<canvas id="gl64canvas" width="1024" height="1024" style="display:none"></canvas>
+<textarea class="emscripten" id="output" rows="20" readonly aria-label="Journal du moteur"></textarea>
+</main>
+<script type="module" src="dbxv2-start.js"></script>
+</body>
+</html>

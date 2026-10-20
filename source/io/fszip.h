@@ -73,7 +73,7 @@ public:
 
     BOXEDWINE_MUTEX readMutex;
 
-    void setupZipRead(U64 zipOffset, U64 zipFileOffset, const void* owner = nullptr);
+    bool setupZipRead(U64 zipOffset, U64 zipFileOffset, const void* owner = nullptr);
     void remove(BString localPath);
 
     static bool readFileFromZip(BString zipFile, BString file, BString& result);

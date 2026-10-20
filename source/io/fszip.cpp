@@ -31,7 +31,7 @@ extern "C"
 #include <time.h>
 #include <string.h>
 
-void FsZip::setupZipRead(U64 zipOffset, U64 zipFileOffset, const void* owner) {
+bool FsZip::setupZipRead(U64 zipOffset, U64 zipFileOffset, const void* owner) {
 #ifdef BOXEDWINE_ZLIB
     // The (lastZipOffset, lastZipFileOffset) skip-ahead is only valid when the
     // stream is exactly where THIS reader last left it. If a different open-node
@@ -43,20 +43,36 @@ void FsZip::setupZipRead(U64 zipOffset, U64 zipFileOffset, const void* owner) {
     bool ownerChanged = (owner != lastReadOwner);
     if (zipOffset != lastZipOffset || zipFileOffset < lastZipFileOffset || ownerChanged) {
         unzCloseCurrentFile(this->zipfile);
-        unzSetOffset64(this->zipfile, zipOffset);
+        lastReadOwner = nullptr;
+        lastZipOffset = ~static_cast<U64>(0);
+        if (unzSetOffset64(this->zipfile, zipOffset) != UNZ_OK) return false;
         lastZipFileOffset = 0;
-        unzOpenCurrentFile(this->zipfile);
+        if (unzOpenCurrentFile(this->zipfile) != UNZ_OK) return false;
         lastZipOffset = zipOffset;
     }
     lastReadOwner = owner;
     if (zipFileOffset != lastZipFileOffset) {
-        char tmp[4096] = {};
-        U32 todo = (U32)(zipFileOffset - lastZipFileOffset);
-        while (todo) {
-            todo-=unzReadCurrentFile(this->zipfile, tmp, todo>4096?4096:todo);
+        int seekResult = unzSeekCurrentFile64(this->zipfile, zipFileOffset);
+        if (seekResult == UNZ_OK) {
+            lastZipFileOffset = zipFileOffset;
+            return true;
         }
-    }  
+        if (seekResult != UNZ_PARAMERROR) return false;
+        char tmp[4096] = {};
+        U64 todo = zipFileOffset - lastZipFileOffset;
+        while (todo) {
+            int read = unzReadCurrentFile(this->zipfile, tmp, (unsigned)(todo > sizeof(tmp) ? sizeof(tmp) : todo));
+            if (read <= 0) {
+                lastReadOwner = nullptr;
+                lastZipOffset = ~static_cast<U64>(0);
+                return false;
+            }
+            todo -= (U64)read;
+            lastZipFileOffset += (U64)read;
+        }
+    }
 #endif
+    return true;
 }
 
 bool FsZip::init(BString zipPath, BString mount) {
@@ -74,31 +90,33 @@ bool FsZip::init(BString zipPath, BString mount) {
     }
     this->lastZipOffset = 0xFFFFFFFFFFFFFFFFl;
     if (zipPath.length()) {
-        unz_global_info global_info = {};
+        unz_global_info64 global_info = {};
 
         this->zipfile = fsZipUrlIsSpec(zipPath) ? fsZipUrlOpen(zipPath)
-                                                 : unzOpen(zipPath.c_str());
+                                                 : unzOpen64(zipPath.c_str());
         if (!this->zipfile) {
             klog_fmt("Could not load zip file: %s", zipPath.c_str());
             return false;
         }
 
-        if (unzGetGlobalInfo( this->zipfile, &global_info ) != UNZ_OK) {
+        if (unzGetGlobalInfo64( this->zipfile, &global_info ) != UNZ_OK) {
             klog_fmt("Could not read file global info from zip file: %s", zipPath.c_str());
             unzClose( this->zipfile );
+            this->zipfile = nullptr;
             return false;
         }
         fsZipInfo* zipInfo = new fsZipInfo[global_info.number_entry];
-        for (U32 i = 0; i < global_info.number_entry; ++i) {
-            unz_file_info file_info = {};
+        for (U64 i = 0; i < global_info.number_entry; ++i) {
+            unz_file_info64 file_info = {};
             struct tm tm={0};
             char tmp[MAX_FILEPATH_LEN];
 
             tmp[0] = '/';
-            if ( unzGetCurrentFileInfo(this->zipfile, &file_info, tmp + 1, MAX_FILEPATH_LEN - 1, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
+            if ( unzGetCurrentFileInfo64(this->zipfile, &file_info, tmp + 1, MAX_FILEPATH_LEN - 1, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
                 klog_fmt("Could not read file info from zip file: %s", zipPath.c_str());
                 delete[] zipInfo;
                 unzClose( zipfile );
+                zipfile = nullptr;
                 return false;
             }
             zipInfo[i].filename = BString::copy(tmp);
@@ -150,14 +168,20 @@ bool FsZip::init(BString zipPath, BString mount) {
         std::vector<BString> deletedLocalPaths;
         readLinesFromFile(deleteFilePath, deletedLocalPaths);
 
-        for (U32 i = 0; i < global_info.number_entry; ++i) {
+        for (U64 i = 0; i < global_info.number_entry; ++i) {
             if (zipInfo[i].filename.endsWith(EXT_LINK)) {
                 char tmp[MAX_FILEPATH_LEN];
                 zipInfo[i].filename = zipInfo[i].filename.substr(0, zipInfo[i].filename.length() - 5);
                 zipInfo[i].isLink = true;
                 unzSetOffset64(zipfile, zipInfo[i].offset);
                 unzOpenCurrentFile(zipfile);
-                U32 read = unzReadCurrentFile(this->zipfile, tmp, MAX_FILEPATH_LEN);
+                int read = unzReadCurrentFile(this->zipfile, tmp, MAX_FILEPATH_LEN - 1);
+                if (read < 0) {
+                    delete[] zipInfo;
+                    unzClose(zipfile);
+                    zipfile = nullptr;
+                    return false;
+                }
                 tmp[read] = 0;
                 zipInfo[i].link = BString::copy(tmp);
                 unzCloseCurrentFile(this->zipfile);
@@ -205,20 +229,20 @@ void FsZip::remove(BString localPath) {
 }
 
 bool FsZip::doesFileExist(BString zipFile, BString file) {
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
-    unz_global_info global_info = {};
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
+    unz_global_info64 global_info = {};
     if (!z) {
         return false;
     }
-    if (unzGetGlobalInfo(z, &global_info) != UNZ_OK) {
+    if (unzGetGlobalInfo64(z, &global_info) != UNZ_OK) {
         unzClose(z);
         return false;
     }
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
 
-        if (unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
+        if (unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
             unzClose(z);
             return false;
         }
@@ -235,33 +259,44 @@ bool FsZip::doesFileExist(BString zipFile, BString file) {
 }
 
 bool FsZip::readFileFromZip(BString zipFile, BString file, BString& result) {
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
-    unz_global_info global_info = {};
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
+    unz_global_info64 global_info = {};
     if (!z) {
         return false;
     }
-    if (unzGetGlobalInfo( z, &global_info ) != UNZ_OK) {
+    if (unzGetGlobalInfo64( z, &global_info ) != UNZ_OK) {
         unzClose( z );
         return false;
     }
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
 
-        if ( unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
+        if ( unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
             unzClose( z );
             return false;
         }
         
         if (file == tmp) {
-            char* buffer = new char[file_info.uncompressed_size+1];
-            unzOpenCurrentFile(z);            
-            U32 read = unzReadCurrentFile(z, buffer, (unsigned)file_info.uncompressed_size);
-            buffer[read]=0;
-            unzCloseCurrentFile(z);
+            // BString is a bounded in-memory text helper, not the streaming API.
+            if (file_info.uncompressed_size > 0x7ffffffeULL || unzOpenCurrentFile(z) != UNZ_OK) {
+                unzClose(z);
+                return false;
+            }
+            std::vector<char> buffer((size_t)file_info.uncompressed_size + 1);
+            U64 totalRead = 0;
+            while (totalRead < file_info.uncompressed_size) {
+                U64 remaining = file_info.uncompressed_size - totalRead;
+                int read = unzReadCurrentFile(z, buffer.data() + (size_t)totalRead,
+                    (unsigned)(remaining > 65536 ? 65536 : remaining));
+                if (read <= 0) break;
+                totalRead += (U64)read;
+            }
+            int closeResult = unzCloseCurrentFile(z);
             unzClose(z);
-            result = BString::copy(buffer);
-            delete[] buffer;
+            if (totalRead != file_info.uncompressed_size || closeResult != UNZ_OK) return false;
+            buffer[(size_t)totalRead] = 0;
+            result = BString::copy(buffer.data());
             return true;
         }
         unzGoToNextFile(z);
@@ -271,47 +306,50 @@ bool FsZip::readFileFromZip(BString zipFile, BString file, BString& result) {
 }
 
 bool FsZip::extractFileFromZip(BString zipFile, BString file, BString path) {
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
-    unz_global_info global_info = {};
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
+    unz_global_info64 global_info = {};
     if (!z) {
         return false;
     }
-    if (unzGetGlobalInfo( z, &global_info ) != UNZ_OK) {
+    if (unzGetGlobalInfo64( z, &global_info ) != UNZ_OK) {
         unzClose( z );
         return false;
     }
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
 
-        if ( unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
+        if ( unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0 ) != UNZ_OK ) {
             unzClose( z );
             return false;
         }
         
         if (file == tmp) {
-            unzOpenCurrentFile(z);            
+            if (unzOpenCurrentFile(z) != UNZ_OK) {
+                unzClose(z);
+                return false;
+            }
             if (!Fs::doesNativePathExist(path)) {
                 Fs::makeNativeDirs(path);
             }
             BString outPath = path.stringByApppendingPath(Fs::getFileNameFromPath(file));
             FILE* f = fopen(outPath.c_str(), "wb");
             if (f) {
-                U32 totalRead = 0;
+                U64 totalRead = 0;
                 U8 buffer[4096] = {};
 
                 while (totalRead<file_info.uncompressed_size) {
-                    U32 read = unzReadCurrentFile(z, buffer, sizeof(buffer));
-                    if (!read) {
+                    int read = unzReadCurrentFile(z, buffer, sizeof(buffer));
+                    if (read <= 0) {
                         break;
                     }
-                    totalRead += read;
-                    fwrite(buffer, read, 1, f);
+                    if (fwrite(buffer, 1, read, f) != (size_t)read) break;
+                    totalRead += (U64)read;
                 }
-                fclose(f);
-                unzCloseCurrentFile(z);
+                int fileCloseResult = fclose(f);
+                int zipCloseResult = unzCloseCurrentFile(z);
                 unzClose(z);
-                return totalRead==file_info.uncompressed_size;
+                return totalRead == file_info.uncompressed_size && fileCloseResult == 0 && zipCloseResult == UNZ_OK;
             } else {
                 unzCloseCurrentFile(z);
                 unzClose(z);
@@ -325,22 +363,22 @@ bool FsZip::extractFileFromZip(BString zipFile, BString file, BString path) {
 }
 
 bool FsZip::iterateFiles(BString zipFile, std::function<void(BString)> it) {
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
-    unz_global_info global_info = {};
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
+    unz_global_info64 global_info = {};
     if (!z) {
         return false;
     }
 
-    if (unzGetGlobalInfo(z, &global_info) != UNZ_OK) {
+    if (unzGetGlobalInfo64(z, &global_info) != UNZ_OK) {
         unzClose(z);
         return false;
     }
 
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
 
-        if (unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
+        if (unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
             unzClose(z);
             return false;
         }
@@ -356,20 +394,20 @@ bool FsZip::detectGuestIs64(BString zipFile) {
     // at the first hit and avoids constructing a full FsZip / opening every
     // entry. Used by the UI launcher to badge installed Wine zips before
     // any container is created.
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
     if (!z) {
         return false;
     }
-    unz_global_info global_info = {};
-    if (unzGetGlobalInfo(z, &global_info) != UNZ_OK) {
+    unz_global_info64 global_info = {};
+    if (unzGetGlobalInfo64(z, &global_info) != UNZ_OK) {
         unzClose(z);
         return false;
     }
     bool result = false;
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
-        if (unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
+        if (unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
             break;
         }
         if (strstr(tmp, "x86_64-linux-gnu/") != nullptr
@@ -386,15 +424,15 @@ bool FsZip::detectGuestIs64(BString zipFile) {
 }
 
 BString FsZip::unzip(BString zipFile, BString path, std::function<void(U32, BString fileName)> percentDone) {
-    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen(zipFile.c_str());
-    unz_global_info global_info = {};
+    unzFile z = fsZipUrlIsSpec(zipFile) ? fsZipUrlOpen(zipFile) : unzOpen64(zipFile.c_str());
+    unz_global_info64 global_info = {};
     if (!z) {
         return "Could not open zip file: " + zipFile;
     }
     U64 fileSize = Fs::getNativeFileSize(zipFile);
     U64 compressedFileSizeProcessed = 0;
 
-    if (unzGetGlobalInfo(z, &global_info) != UNZ_OK) {
+    if (unzGetGlobalInfo64(z, &global_info) != UNZ_OK) {
         unzClose(z);
         return "Could not read file global info from zip file: "+ zipFile;
     }
@@ -403,11 +441,11 @@ BString FsZip::unzip(BString zipFile, BString path, std::function<void(U32, BStr
             return "Could not create directory: " + path + "\n\n" + strerror(errno);
         }
     }
-    for (U32 i = 0; i < global_info.number_entry; ++i) {
-        unz_file_info file_info;
+    for (U64 i = 0; i < global_info.number_entry; ++i) {
+        unz_file_info64 file_info;
         char tmp[MAX_FILEPATH_LEN];
 
-        if (unzGetCurrentFileInfo(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
+        if (unzGetCurrentFileInfo64(z, &file_info, tmp, MAX_FILEPATH_LEN, nullptr, 0, nullptr, 0) != UNZ_OK) {
             unzClose(z);
             return "Could not read file info from zip file: "+zipFile;
         }
@@ -426,8 +464,11 @@ BString FsZip::unzip(BString zipFile, BString path, std::function<void(U32, BStr
         if (Fs::nativePathSeperator != "/") {
             fileName = fileName.replace("/", Fs::nativePathSeperator);
         }
-        unzOpenCurrentFile(z);        
-        percentDone((U32)(compressedFileSizeProcessed * 100 / fileSize), fileName);
+        if (unzOpenCurrentFile(z) != UNZ_OK) {
+            unzClose(z);
+            return "Could not open zip entry: " + fileName;
+        }
+        percentDone(fileSize ? (U32)(compressedFileSizeProcessed * 100 / fileSize) : 0, fileName);
         BString outPath = path.stringByApppendingPath(fileName);
 #ifdef BOXEDWINE_MSVC
         if (outPath.length() > 255) {
@@ -436,19 +477,23 @@ BString FsZip::unzip(BString zipFile, BString path, std::function<void(U32, BStr
 #endif
         FILE* f = fopen(outPath.c_str(), "wb");
         if (f) {
-            U32 totalRead = 0;
+            U64 totalRead = 0;
             U8 buffer[4096] = {};
 
             while (totalRead < file_info.uncompressed_size) {
-                U32 read = unzReadCurrentFile(z, buffer, sizeof(buffer));
-                if (!read) {
+                int read = unzReadCurrentFile(z, buffer, sizeof(buffer));
+                if (read <= 0) {
                     break;
                 }
-                totalRead += read;
-                fwrite(buffer, read, 1, f);
+                if (fwrite(buffer, 1, read, f) != (size_t)read) break;
+                totalRead += (U64)read;
             }
-            fclose(f);
-            unzCloseCurrentFile(z);
+            int fileCloseResult = fclose(f);
+            int zipCloseResult = unzCloseCurrentFile(z);
+            if (totalRead != file_info.uncompressed_size || fileCloseResult != 0 || zipCloseResult != UNZ_OK) {
+                unzClose(z);
+                return "Could not extract complete file: " + outPath;
+            }
             compressedFileSizeProcessed += file_info.compressed_size;            
         } else {
             unzCloseCurrentFile(z);

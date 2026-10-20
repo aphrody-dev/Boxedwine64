@@ -318,6 +318,11 @@ extern int ZEXPORT unzGetCurrentFileInfo OF((unzFile file,
 
 /** Addition for GDAL : START */
 
+/* Absolute seek for unencrypted STORE entries only. Nonzero seeks disable
+   whole-entry CRC validation until seeking to zero. Other methods return
+   UNZ_PARAMERROR without modifying the stream. */
+extern int ZEXPORT unzSeekCurrentFile64 OF((unzFile file, ZPOS64_T offset));
+
 extern ZPOS64_T ZEXPORT unzGetCurrentFileZStreamPos64 OF((unzFile file));
 
 /** Addition for GDAL : END */

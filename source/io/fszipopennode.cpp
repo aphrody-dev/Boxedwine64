@@ -34,7 +34,7 @@ S64 FsZipOpenNode::length() {
 
 bool FsZipOpenNode::setLength(S64 len) {
     // if this file was open for write, it would have been copied to the file system
-    kpanic("FsZipOpenNode::setLength should not have been called"); 
+    kpanic("FsZipOpenNode::setLength should not have been called");
     return false;
 }
 
@@ -95,8 +95,10 @@ U32 FsZipOpenNode::readNative(U8* buffer, U32 len) {
     BOXEDWINE_CRITICAL_SECTION_WITH_MUTEX(*getReadMutex());
     std::shared_ptr<FsZip> fsZip = zipNode->fsZip.lock();
     if (fsZip) {
-        fsZip->setupZipRead(this->offset, this->pos, this);
-        result = unzReadCurrentFile(fsZip->zipfile, buffer, len);
+        if (!fsZip->setupZipRead(this->offset, this->pos, this)) return (U32)-K_EIO;
+        int read = unzReadCurrentFile(fsZip->zipfile, buffer, len);
+        if (read < 0) return (U32)-K_EIO;
+        result = (U32)read;
         this->pos += result;
         fsZip->lastZipFileOffset = this->pos;
     }
