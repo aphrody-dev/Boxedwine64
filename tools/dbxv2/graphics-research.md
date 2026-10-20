@@ -14,6 +14,13 @@ complète, exécutée et vérifiée entre ce frontal et WebGPU. Un nom de DLL, u
 pas cette traduction. Cette conclusion constate l'état des sources examinées ;
 elle ne démontre aucune impossibilité absolue d'exécuter DBXV2 dans un navigateur.
 
+**Actualisation de la sonde Chrome, même session :** le probe D3D11 réel renvoie
+`hresult=0x00000000`, `feature_level=0x9100`, `device=1`, `context=1`, puis le
+code de sortie 5 car la sonde exige au moins le niveau 11.0. L'API D3D11 est donc
+présente via Wine ; cette exécution n'obtient que le niveau **9.1**. Ce résultat
+ne prouve ni le niveau 11.0 ni une scène jouable de DBXV2. Il ne faut pas présenter
+ce résultat comme une absence totale de D3D11.
+
 La chaîne à construire sans réécrire le jeu est :
 
 ```text

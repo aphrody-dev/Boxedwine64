@@ -3438,8 +3438,10 @@ dsp_54:
         }
         // MOVNTDQ — 66 0F E7 /r. Non-temporal store of xmm to m128. We
         // ignore the cache hint and treat as a plain 16-byte store.
-        if (op2 == 0xE7 && osize66) {
+        // MOVNTPS/MOVNTPD — [66] 0F 2B /r use the same store semantics.
+        if ((op2 == 0xE7 && osize66) || (op2 == 0x2B && p.rep == 0)) {
             ModRM m = decodeModRM(rip + opOff + 2, p, 0);
+            if (op2 == 0x2B && m.isReg) goto unhandled;
             if (!m.isReg) {
                 memory->writeq(m.effAddr,     xmm[m.regField].lo);
                 memory->writeq(m.effAddr + 8, xmm[m.regField].hi);

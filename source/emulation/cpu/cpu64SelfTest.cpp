@@ -226,6 +226,35 @@ int runX64SelfTest() {
         if (ok) r.passed++; else r.failed++;
     }
 
+    // Non-temporal packed stores: actual consecutive MOVNTPS instructions,
+    // MOVNTPD's 66 prefix, and extended XMM/base registers through REX.
+    for (int variant = 0; variant < 3; variant++) {
+        KMemory64 mem(nullptr);
+        mem.mmapAnonymousFixed(CODE_BASE, 0x1000, 7);
+        mem.mmapAnonymousFixed(STACK_TOP - 0x1000, 0x1000, 3);
+        const std::vector<U8> code = variant == 0
+            ? std::vector<U8>{0x0F, 0x2B, 0x07, 0x0F, 0x2B, 0x47, 0x10}
+            : variant == 1 ? std::vector<U8>{0x66, 0x0F, 0x2B, 0x07}
+                           : std::vector<U8>{0x45, 0x0F, 0x2B, 0x01};
+        loadCode(mem, CODE_BASE, code);
+        const U64 destination = STACK_TOP - 64;
+        const U64 lo = 0x0123456789abcdefULL, hi = 0xfedcba9876543210ULL;
+        CPU64 cpu(&mem);
+        cpu.rip = CODE_BASE;
+        cpu.reg[X64_RDI].setU64(destination);
+        cpu.reg[X64_R9].setU64(destination);
+        const int source = variant == 2 ? 8 : 0;
+        cpu.xmm[source].lo = lo;
+        cpu.xmm[source].hi = hi;
+        cpu.runBounded(variant == 0 ? 2 : 1);
+        bool ok = cpu.rip == CODE_BASE + code.size() &&
+            mem.readq(destination) == lo && mem.readq(destination + 8) == hi &&
+            cpu.xmm[source].lo == lo && cpu.xmm[source].hi == hi;
+        if (variant == 0) ok = ok && mem.readq(destination + 16) == lo && mem.readq(destination + 24) == hi;
+        printf("  %s: movntps/movntpd store variant %d\n", ok ? "PASS" : "FAIL", variant);
+        if (ok) r.passed++; else r.failed++;
+    }
+
     // IRETQ (48 CF). Wine's PE-side ntdll returns from its user-mode exception
     // dispatcher with iretq. Build a long-mode interrupt frame on the stack
     // (pushed high-to-low: SS, RSP, RFLAGS, CS, RIP) and execute iretq; it must

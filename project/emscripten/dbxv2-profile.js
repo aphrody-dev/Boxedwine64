@@ -61,11 +61,28 @@ export async function loadDbxv2Profile({
   )
     throw new Error("Invalid installation ZIP signature");
   const program = `${DBXV2_MOUNT_PATH}/${executable}`;
+  const runtimeSpecs = [];
+  for (const runtime of manifest.runtimeArchives ?? []) {
+    const runtimeUrl = new URL(runtime.url, origin);
+    if (
+      runtimeUrl.origin !== origin ||
+      runtimeUrl.username ||
+      runtimeUrl.password ||
+      /[;|\s]/.test(runtimeUrl.href) ||
+      !Number.isSafeInteger(runtime.bytes) ||
+      runtime.bytes <= 0
+    )
+      throw new Error("Invalid runtime archive");
+    runtimeSpecs.push(
+      `bw64url:${runtime.bytes};${runtimeUrl.href}|${runtime.bytes}`,
+    );
+  }
   return {
     program,
     programArgv: [program],
     workingDirectory: DBXV2_MOUNT_PATH,
     zipSpecs: [
+      ...runtimeSpecs,
       `bw64url:${manifest.archiveBytes};${archive.href}|${manifest.archiveBytes}`,
     ],
     entryCount: manifest.entryCount,

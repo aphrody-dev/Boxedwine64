@@ -44,13 +44,39 @@ Bun avait expiré sans assertions et n'est pas compté comme une validation.
 Le jeu est relancé avec `?session=0` pour éviter les programmes auxiliaires de
 la session persistante ; son résultat reste à qualifier séparément.
 
+Le lancement suivant dépasse `RET imm16` puis rencontre `0f 2b 07` et
+`0f 2b 47 10` à `0x140090270` : `MOVNTPS`. Le correctif ajoute les stores
+`MOVNTPS/MOVNTPD` et trois tests de mémoire, préfixe 66 et registres REX.
+Le nouveau WASM compilé porte le SHA-256
+`0b5333e3e8a29878a69c7780e5df68ea76b793aad7a77642df40eb28a8e6a60b`.
+Chrome, après rechargement du moteur, confirme **241 tests réussis, zéro échec**.
+Ce résultat valide les tests CPU, pas le lancement complet du jeu.
+
+L'absence de `libgnutls.so.30`, chargée dynamiquement par Wine, est corrigée
+dans le script de construction du rootfs. Un overlay Debian Bookworm de neuf
+bibliothèques (2 869 713 octets, SHA-256
+`e023d0fa8bd1941e71bc69585dc67e324d3c261506aa92695acc5446082185c6`)
+est monté par le profil. La fermeture des dépendances ELF et les versions GLIBC
+sont vérifiées ; le chargement réel pendant le lancement reste à qualifier.
+
+Le nouvel essai Chrome monte cet overlay, ne reproduit plus les échecs
+`RET imm16`/`MOVNTPS`, puis atteint les chargements des DLL Steam, xgcore,
+iggy et render_pass. Il rencontre ensuite une instruction non implémentée :
+`0f 5a c6` (`CVTPS2PD`) à `0x14003aa44`. Le canevas reste noir ; aucun menu
+ni gameplay n'est confirmé. L'absence d'erreur GnuTLS dans ce journal ne vaut
+pas une qualification de connexion TLS.
+
 ## Compression
 
 Sur le premier moteur patché, le WASM de 2 638 098 octets donne 685 890 octets en
 Brotli ; le JavaScript de 410 269 octets donne 83 613 octets. Les archives ZIP/CPK
 conservent leur représentation originale pour les lectures Range. La négociation
-HTTP des fichiers précompressés est testée localement, mais le serveur de test
-déjà démarré n'a pas encore été relancé avec cette nouvelle version.
+HTTP des fichiers précompressés est testée localement. Le serveur de test a été
+relancé avec cette version et son manifeste expose également l'overlay GnuTLS.
+Le contrôle HTTP réel confirme le WASM Brotli de 686 136 octets, COEP
+`require-corp`, et les réponses 206 exactes du jeu à 39 milliards d'octets et
+de l'overlay GnuTLS. Les preuves brutes restent dans les artefacts de build
+`server-verification.json` et `dbxv2-build-receipt.json`.
 
 Ce rapport ne constitue pas une validation de production. Aucun déploiement du
 jeu comme produit jouable n'a été effectué dans ce lot.

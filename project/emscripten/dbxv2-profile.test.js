@@ -137,4 +137,20 @@ describe("DBXV2 boot profile", () => {
       }),
     ).rejects.toThrow("same-origin");
   });
+  test("mounts same-origin runtime dependencies and rejects foreign overlays", async () => {
+    const runtime = { url: "/gnutls-bookworm.zip", bytes: 2869713 };
+    const fetcher = async (url) =>
+      String(url).endsWith("manifest.json")
+        ? Response.json({ ...manifest, runtimeArchives: [runtime] })
+        : mockFetch(url);
+    const profile = await loadDbxv2Profile({ origin, fetcher });
+    expect(profile.zipSpecs[0]).toBe(
+      `bw64url:2869713;${origin}/gnutls-bookworm.zip|2869713`,
+    );
+    expect(profile.zipSpecs).toHaveLength(2);
+    runtime.url = "https://foreign.invalid/runtime.zip";
+    await expect(loadDbxv2Profile({ origin, fetcher })).rejects.toThrow(
+      "Invalid runtime archive",
+    );
+  });
 });

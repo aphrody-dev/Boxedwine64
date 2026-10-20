@@ -201,7 +201,11 @@ async function main() {
           headers: { ...isolation, Allow: "GET, HEAD" },
         });
       const url = new URL(request.url);
-      if (url.pathname === "/dbxv2/manifest.json")
+      if (url.pathname === "/dbxv2/manifest.json") {
+        const runtime = Bun.file(resolve(artifacts, "gnutls-bookworm.zip"));
+        const runtimeArchives = (await runtime.exists())
+          ? [{ url: "/gnutls-bookworm.zip", bytes: runtime.size }]
+          : [];
         return new Response(
           request.method === "HEAD"
             ? null
@@ -210,9 +214,11 @@ async function main() {
                 archiveBytes: archive.size,
                 entryCount: archive.entryCount,
                 executable: "START.exe",
+                runtimeArchives,
               }),
           { headers: { ...isolation, "Content-Type": "application/json" } },
         );
+      }
       if (url.pathname === "/dbxv2/archive.zip")
         return rangeResponse(
           request,

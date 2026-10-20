@@ -93,7 +93,10 @@ copy /usr/lib/x86_64-linux-gnu/libfreetype.so.6
 # (x86_64-linux-gnu); copy() preserves the source path, so stage from /usr/lib
 # (debian usr-merge: same inode as /lib) AND drop a /lib copy to match where the
 # base X libs already live (glibc-rootfs64.zip's lib/ tree).
-x11_dlopen_libs=(
+# Wine also loads GnuTLS dynamically for bcrypt/schannel. DT_NEEDED-only
+# traversal omits it, leaving the guest unable to load libgnutls.so.30.
+# Include its complete Debian dependency closure with the other dlopen roots.
+runtime_dlopen_libs=(
   /usr/lib/x86_64-linux-gnu/libXrender.so.1     # alpha/render visuals (core for GL win)
   /usr/lib/x86_64-linux-gnu/libXcursor.so.1      # themed cursors
   /usr/lib/x86_64-linux-gnu/libXfixes.so.3       # dep of Xcursor/Xcomposite
@@ -102,9 +105,14 @@ x11_dlopen_libs=(
   /usr/lib/x86_64-linux-gnu/libXinerama.so.1     # multi-monitor probe
   /usr/lib/x86_64-linux-gnu/libXxf86vm.so.1      # mode/gamma probe
   /usr/lib/x86_64-linux-gnu/libXrandr.so.2       # randr (commonly probed alongside)
+  /usr/lib/x86_64-linux-gnu/libgnutls.so.30      # bcrypt/schannel crypto provider
 )
 mkdir -p "$STAGE/lib/x86_64-linux-gnu"
-for xl in "${x11_dlopen_libs[@]}"; do
+if [ ! -e /usr/lib/x86_64-linux-gnu/libgnutls.so.30 ]; then
+  echo "Missing libgnutls30 in the Debian Wine image" >&2
+  exit 1
+fi
+for xl in "${runtime_dlopen_libs[@]}"; do
   copy "$xl"                                       # -> /usr/lib/x86_64-linux-gnu
   [ -e "$xl" ] && cp -aL "$(readlink -f "$xl")" "$STAGE/lib/x86_64-linux-gnu/$(basename "$xl")"
   # also pull each lib's own resolved closure (deref real path; ldd lists deps)
