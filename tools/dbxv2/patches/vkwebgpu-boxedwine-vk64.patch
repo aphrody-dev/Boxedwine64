@@ -1,0 +1,75 @@
+diff --git a/vkwebgpu/src/webx_ipc.rs b/vkwebgpu/src/webx_ipc.rs
+index d8381c8..fa66afd 100644
+--- a/vkwebgpu/src/webx_ipc.rs
++++ b/vkwebgpu/src/webx_ipc.rs
+@@ -62,7 +62,7 @@ impl WebXIpc {
+ 
+     fn new(port: u16) -> Self {
+         let ipc = WebXIpc { port, seq: AtomicU32::new(1) };
+-        ipc.port_init();
++        if std::env::var_os("BOXEDWINE_VK64").is_none() { ipc.port_init(); }
+         ipc
+     }
+ 
+@@ -200,6 +200,10 @@ impl WebXIpc {
+     /// Send `cmd` with `payload`, block until the host response arrives.
+     /// Returns the response data bytes on success or a VkError on failure.
+     pub fn send_cmd(&self, cmd: u32, payload: &[u8]) -> Result<Vec<u8>> {
++        #[cfg(target_arch = "x86_64")]
++        if std::env::var_os("BOXEDWINE_VK64").is_some() {
++            return self.boxedwine_cmd(cmd, payload);
++        }
+         let seq = self.next_seq();
+         let len = payload.len() as u32;
+ 
+@@ -250,6 +254,50 @@ impl WebXIpc {
+         Ok(data)
+     }
+ 
++    // Boxedwine transport preserves the WebX serializers and packet layout.
++    #[cfg(target_arch = "x86_64")]
++    fn boxedwine_cmd(&self, cmd: u32, payload: &[u8]) -> Result<Vec<u8>> {
++        const LIMIT: usize = 16 * 1024 * 1024;
++        fn fail(message: impl Into<String>) -> VkError {
++            VkError::DeviceCreationFailed(message.into())
++        }
++        unsafe fn call(op: u64, ptr: u64, len: u64) -> i64 {
++            let result: i64;
++            core::arch::asm!("syscall", inlateout("rax") 0x564b0000u64 => result,
++                in("rdi") op, in("rsi") ptr, in("rdx") len,
++                out("rcx") _, out("r11") _, options(nostack));
++            result
++        }
++        if payload.len() > LIMIT - 16 { return Err(fail("VK64 packet too large")); }
++        let seq = self.next_seq();
++        let mut packet = Vec::with_capacity(16 + payload.len());
++        for value in [WEBX_MAGIC, cmd, seq, payload.len() as u32] {
++            packet.extend_from_slice(&value.to_le_bytes());
++        }
++        packet.extend_from_slice(payload);
++        let submitted = unsafe { call(1, packet.as_ptr() as u64, packet.len() as u64) };
++        if submitted != 0 { return Err(fail(format!("VK64 submit errno {}", submitted))); }
++        struct Cancel;
++        impl Drop for Cancel { fn drop(&mut self) { unsafe { call(3, 0, 0); } } }
++        let _cancel = Cancel;
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
++        let size = loop {
++            let size = unsafe { call(2, 0, 0) };
++            if size != -11 { break size; }
++            if std::time::Instant::now() >= deadline { return Err(fail("VK64 timed out")); }
++            std::thread::sleep(std::time::Duration::from_millis(1));
++        };
++        if size < 12 || size > LIMIT as i64 { return Err(fail(format!("VK64 poll {}", size))); }
++        let mut response = vec![0u8; size as usize];
++        let copied = unsafe { call(2, response.as_mut_ptr() as u64, response.len() as u64) };
++        if copied != size { return Err(fail(format!("VK64 receive {}", copied))); }
++        let word = |offset| u32::from_le_bytes(response[offset..offset+4].try_into().unwrap());
++        if word(0) != seq || word(8) as usize != response.len()-12 { return Err(fail("VK64 invalid response")); }
++        let result = word(4) as i32;
++        if result < 0 { return Err(fail(format!("VK64 host VkResult {}", result))); }
++        Ok(response[12..].to_vec())
++    }
++
+     /// Poll inl() until the first 4 bytes of the response are available
+     /// (i.e. until the value is not the FIFO_EMPTY sentinel).
+     fn poll_u32(&self) -> u32 {

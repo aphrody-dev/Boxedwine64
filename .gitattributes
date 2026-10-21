@@ -69,3 +69,6 @@
 # .txt files are CRLF and must stay CRLF).
 ###############################################################################
 tools/rootfs64/apps/** -text
+
+# Unified patches require a single context prefix even on empty lines.
+tools/dbxv2/patches/*.patch text eol=lf whitespace=-blank-at-eol

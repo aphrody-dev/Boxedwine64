@@ -14,6 +14,8 @@
 #include "syscall64.h"
 #include "cpu64.h"
 #include "kmemory64.h"
+#include "../vulkan/vk64bridge.h"
+#include "../vulkan/vk64bridge_abi.h"
 #include "ksocket.h"
 #include <thread>   // std::this_thread::yield() for sched_yield
 #include <mutex>    // std::recursive_mutex for BW64_SERIAL_TEARDOWN
@@ -2690,6 +2692,7 @@ static const char* x64SyscallName(U64 nr) {
     if (nr == GL64_SYSCALL_NR) return "gl64_trap";
 #endif
     switch (nr) {
+        case VK64_SYSCALL_NR: return "vk64_trap";
         case 0: return "read";
         case 1: return "write";
         case 2: return "open";
@@ -2899,6 +2902,9 @@ void ksyscall64(CPU64* cpu) {
     }
 
     switch (nr) {
+        case VK64_SYSCALL_NR:
+            ret = vk64Bridge(cpu, a1, a2, a3);
+            break;
 #ifdef BOXEDWINE_OPENGL
         case GL64_SYSCALL_NR:
             // Private guest->host OpenGL trap (see source/opengl/gl64bridge*).
@@ -4289,9 +4295,11 @@ void ksyscall64(CPU64* cpu) {
             ret = (U64)-K_ENOSYS;
             break;
         case X64_SYS_exit:
+            vk64Cancel(cpu, false);
             ret = sys_exit64(cpu, a1, false);
             break;
         case X64_SYS_exit_group:
+            vk64Cancel(cpu, true);
             ret = sys_exit64(cpu, a1, true);
             break;
         case 74:  // fsync(fd)
