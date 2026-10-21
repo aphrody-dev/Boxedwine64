@@ -834,6 +834,8 @@
                 // is NOT necessarily === window.Module. Capture it so loadFilesystem
                 // and the FS writes target the real object.
                 liveModule = (typeof Module !== "undefined") ? Module : window.Module;
+                if (BOOT_PROFILE && typeof BOOT_PROFILE.observeRuntime === "function")
+                    BOOT_PROFILE.observeRuntime(liveModule);
                 // Host-side GL trace (read via getenv in gl64bridge.cpp). Emscripten
                 // getenv() reads Module.ENV; set it before main() runs.
                 try { liveModule["ENV"] = liveModule["ENV"] || {}; liveModule["ENV"]["BW64_GLTRACE"] = (param("gltrace") || "1"); } catch (e) {}

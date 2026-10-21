@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagnostic DBXV2 original</title><link rel="stylesheet" href="boxedwine.css"></head>
+<body><main id="app">
+<h1>Diagnostic du programme DBXV2 original</h1>
+<p>Ce test lance le véritable EXE depuis son dossier bin pour isoler les erreurs de chargement et de répertoire. Aucun fichier du jeu ni mécanisme Steam/EAC n’est modifié. Ce diagnostic ne démontre pas la jouabilité.</p>
+<button id="launch" type="button">Lancer le diagnostic</button>
+<output id="status" role="status">Prêt.</output>
+<progress id="progress" hidden></progress><span id="spinner" hidden></span>
+<div id="dropzone"><div class="emscripten_border"><canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="0" aria-label="Affichage du programme Windows"></canvas></div></div>
+<canvas id="gl64canvas" width="1024" height="1024" style="display:none"></canvas>
+<textarea class="emscripten" id="output" rows="20" readonly aria-label="Journal du diagnostic"></textarea>
+</main><script type="module" src="dbxv2-direct-diagnostic.js"></script></body>
+</html>

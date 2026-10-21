@@ -71,7 +71,13 @@ alias source/destination, lecture m64 en fin de page, registres REX avec zéro
 signé et infini. Chrome exécute le nouveau WASM SHA-256
 `3536227c3bbd523e17079c3afbdea8760e4b9da24a23d458af82bfa77291a0d8` :
 **245 tests réussis, zéro échec**, dont les quatre nouvelles variantes.
-Le lancement complet du jeu avec ce dernier moteur reste à qualifier.
+Le nouvel essai du jeu dans Chrome atteint ensuite le processus Wine pid 49,
+commande `Z:\home\username\DBXV2\bin\dbxv2.exe`, puis `exit_group status=53`.
+Aucune nouvelle instruction non implémentée n'apparaît dans ce journal. Un
+second essai avec `WINEDEBUG=+module` reproduit cette sortie sans fournir de
+trace Wine indiquant une dépendance précise. La cause n'est donc pas encore
+établie. Une sonde Windows indépendante charge les DLL originales pour isoler
+le défaut ; les fichiers du jeu restent inchangés.
 
 ## Compression
 

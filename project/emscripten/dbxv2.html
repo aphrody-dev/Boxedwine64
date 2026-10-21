@@ -7,6 +7,7 @@
 <p>L’installation complète configurée sur le serveur local est montée en lecture seule. Les fichiers sont lus à la demande. Ce profil tente le lancement du programme original ; sa compatibilité graphique, Steam et EAC n’est pas encore validée.</p>
 <button id="launch" type="button">Monter l’installation et lancer</button>
 <output id="status" role="status">Prêt à charger l’installation configurée.</output>
+<details><summary>Diagnostic audio réel</summary><button type="button" id="audio-resume">Activer la sortie audio</button><output id="audio-status">En attente du moteur audio.</output></details>
 <progress id="progress" hidden></progress><span id="spinner" hidden></span>
 <div id="dropzone"><div class="emscripten_border"><canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="0" aria-label="Affichage du programme Windows"></canvas></div></div>
 <canvas id="gl64canvas" width="1024" height="1024" style="display:none"></canvas>
