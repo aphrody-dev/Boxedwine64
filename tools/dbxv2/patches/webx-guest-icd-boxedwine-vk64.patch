@@ -1,0 +1,159 @@
+diff --git a/guest-icd/src/vkwebx.c b/guest-icd/src/vkwebx.c
+index 28eeb5d..0aee5b0 100644
+--- a/guest-icd/src/vkwebx.c
++++ b/guest-icd/src/vkwebx.c
+@@ -25,7 +25,7 @@
+ #include <stdio.h>
+ #include <stdatomic.h>
+ #include <time.h>
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(BOXEDWINE_VK64)
+ #include <sys/io.h>
+ #endif
+ 
+@@ -55,10 +55,67 @@ static int                   g_port_ready = 0;
+ static pthread_mutex_t       g_ipc_lock   = PTHREAD_MUTEX_INITIALIZER;
+ static atomic_uint_fast32_t  g_seq        = 1;
+ 
++
++#ifdef BOXEDWINE_VK64
++#include <errno.h>
++#if !defined(__x86_64__)
++#error BOXEDWINE_VK64 requires an x86-64 guest
++#endif
++#define BWVK_MAX (16u * 1024u * 1024u)
++static long bwvk_error;
++static struct timespec bwvk_started;
++/* Raw syscall preserves the kernel's signed negative errno convention. */
++static long bwvk_trap(long op, const void *ptr, size_t size) {
++    long result;
++    __asm__ volatile("syscall" : "=a"(result)
++        : "a"(0x564b0000UL), "D"(op), "S"(ptr), "d"(size)
++        : "rcx", "r11", "memory");
++    return result;
++}
++static int bwvk_fail(long error) {
++    (void)bwvk_trap(3, NULL, 0);
++    bwvk_error = error < 0 ? error : -EIO;
++    fprintf(stderr, "[webx-icd] VK64 transport error %ld\n", bwvk_error);
++    return -1;
++}
++static int bwvk_read(uint32_t sequence, WebXResponse *out) {
++    if (bwvk_error) return -1;
++    long size;
++    for (;;) {
++        struct timespec now;
++        if (clock_gettime(CLOCK_MONOTONIC, &now)) return bwvk_fail(-errno);
++        if ((now.tv_sec - bwvk_started.tv_sec) * 1000000000LL +
++            now.tv_nsec - bwvk_started.tv_nsec >= 25000000000LL)
++            return bwvk_fail(-ETIMEDOUT);
++        size = bwvk_trap(2, NULL, 0);
++        if (size != -EAGAIN) break;
++        const struct timespec delay = {0, 500000};
++        nanosleep(&delay, NULL);
++    }
++    if (size < 0) return bwvk_fail(size);
++    if (size < 12 || size > BWVK_MAX) return bwvk_fail(-EMSGSIZE);
++    uint8_t *reply = malloc((size_t)size);
++    if (!reply) return bwvk_fail(-ENOMEM);
++    long received = bwvk_trap(2, reply, (size_t)size);
++    if (received != size) { free(reply); return bwvk_fail(received < 0 ? received : -EIO); }
++    WebXResponseHeader header;
++    memcpy(&header, reply, sizeof(header));
++    if (header.seq != sequence || header.len != (uint32_t)size - 12) {
++        free(reply); return bwvk_fail(-EPROTO);
++    }
++    out->result = header.result;
++    out->len = header.len;
++    /* Reuse the bounded response allocation; no second payload allocation. */
++    memmove(reply, reply + 12, header.len);
++    out->data = reply;
++    return 0;
++}
++#endif
++
+ static void port_init(void) {
+     if (g_port_ready) return;
+     g_port_ready = 1;
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(BOXEDWINE_VK64)
+     /* Request OS permission for 4 consecutive I/O ports starting at WEBX_PORT.
+      * Canary emulates I/O port access, but ioperm makes guest intent explicit.
+      * Fall back to iopl(3) if ioperm fails (requires CAP_SYS_RAWIO). */
+@@ -75,7 +132,13 @@ static int dev_open(void) {
+ /* Stream packet bytes to the host one byte at a time via outb().
+  * Each outb() generates a hostPort.onmessage event on the host. */
+ static void ipc_write_packet(const uint8_t *pkt, size_t total) {
+-#ifdef __x86_64__
++#ifdef BOXEDWINE_VK64
++    if (bwvk_error) return;
++    if (!pkt || total < 16 || total > BWVK_MAX) { bwvk_fail(-EMSGSIZE); return; }
++    if (clock_gettime(CLOCK_MONOTONIC, &bwvk_started)) { bwvk_fail(-errno); return; }
++    long result = bwvk_trap(1, pkt, total);
++    if (result != 0) bwvk_fail(result);
++#elif defined(__x86_64__)
+     for (size_t i = 0; i < total; i++)
+         outb(pkt[i], WEBX_PORT);
+ #else
+@@ -93,6 +156,10 @@ static void ipc_write_packet(const uint8_t *pkt, size_t total) {
+  *   Once inl() != 0xFFFFFFFF, we have the seq; then read result + len + payload.
+  */
+ static int ipc_read_response(uint32_t expected_seq, WebXResponse *out, int timeout_ms) {
++#ifdef BOXEDWINE_VK64
++    (void)timeout_ms;
++    return bwvk_read(expected_seq, out);
++#else
+     struct timespec ts_start, ts_now;
+     clock_gettime(CLOCK_MONOTONIC, &ts_start);
+ 
+@@ -150,6 +217,7 @@ static int ipc_read_response(uint32_t expected_seq, WebXResponse *out, int timeo
+     return -1;
+ #endif
+ 
++#endif /* BOXEDWINE_VK64 */
+ }
+ 
+ /* ── Send a command and optionally read a synchronous response ────────── */
+@@ -162,11 +230,27 @@ static uint32_t next_seq(void) {
+ }
+ 
+ void webx_send(VkWebXCmd cmd, const void *payload, uint32_t payload_len) {
++#ifdef BOXEDWINE_VK64
++    if (payload_len > BWVK_MAX - 16) {
++        pthread_mutex_lock(&g_ipc_lock);
++        bwvk_fail(-EMSGSIZE);
++        pthread_mutex_unlock(&g_ipc_lock);
++        return;
++    }
++#endif
+     uint32_t seq = next_seq();
+     size_t total;
+     uint8_t *pkt = webx_packet_build(cmd, seq, payload, payload_len, &total);
+     pthread_mutex_lock(&g_ipc_lock);
+     ipc_write_packet(pkt, total);
++#ifdef BOXEDWINE_VK64
++    /* The Boxedwine transport completes every submission, including void calls. */
++    WebXResponse response;
++    if (ipc_read_response(seq, &response, 25000) == 0) {
++        if (response.result != VK_SUCCESS) bwvk_fail(-EIO);
++        free(response.data);
++    }
++#endif
+     pthread_mutex_unlock(&g_ipc_lock);
+     webx_packet_free(pkt);
+     /* Fire-and-forget: no response wait */
+@@ -174,6 +258,14 @@ void webx_send(VkWebXCmd cmd, const void *payload, uint32_t payload_len) {
+ 
+ VkResult webx_call(VkWebXCmd cmd, const void *payload, uint32_t payload_len,
+                    uint8_t **out_data, uint32_t *out_len) {
++#ifdef BOXEDWINE_VK64
++    if (payload_len > BWVK_MAX - 16) {
++        pthread_mutex_lock(&g_ipc_lock);
++        bwvk_fail(-EMSGSIZE);
++        pthread_mutex_unlock(&g_ipc_lock);
++        return VK_ERROR_DEVICE_LOST;
++    }
++#endif
+     uint32_t seq = next_seq();
+     size_t total;
+     uint8_t *pkt = webx_packet_build(cmd, seq, payload, payload_len, &total);
